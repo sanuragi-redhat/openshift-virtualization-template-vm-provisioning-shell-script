@@ -1,0 +1,1 @@
+oc process -n uat-infra-tools windows2k22-template NAME=windows-2022-vm1 | oc apply -f -

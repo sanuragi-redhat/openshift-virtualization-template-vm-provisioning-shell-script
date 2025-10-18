@@ -1,0 +1,155 @@
+#!/bin/bash
+
+# ===============================================
+# 🔧 OpenShift Multi-VM Provisioner & Manager
+# ===============================================
+
+NAMESPACE="uat-infra-tools"
+
+# Templates
+declare -A templates
+templates=(
+  ["1"]="centos-stream9-desktop"
+  ["2"]="rhel8-desktop"
+  ["3"]="windows2k22-vm-template"
+  ["4"]="windows2k25"
+)
+
+# --- Function to create multiple VMs ---
+create_vms() {
+  echo ""
+  echo "Select a template to provision:"
+  echo "1) CentOS Stream 9 Desktop"
+  echo "2) RHEL 8 Desktop"
+  echo "3) Windows Server 2022 (Template)"
+  echo "4) Windows Server 2025"
+  echo ""
+
+  read -p "Enter your choice [1-4]: " choice
+  if [[ -z "${templates[$choice]}" ]]; then
+    echo "❌ Invalid choice. Exiting."
+    exit 1
+  fi
+
+  TEMPLATE=${templates[$choice]}
+  read -p "Enter VM base name (e.g., rhel8-node): " BASE_NAME
+  read -p "How many VMs do you want to create? " COUNT
+
+  if [[ -z "$BASE_NAME" || -z "$COUNT" || "$COUNT" -lt 1 ]]; then
+    echo "❌ Invalid input."
+    exit 1
+  fi
+
+  echo ""
+  echo "==============================================="
+  echo " Template:  $TEMPLATE"
+  echo " Base name: $BASE_NAME"
+  echo " Count:     $COUNT"
+  echo " Namespace: $NAMESPACE"
+  echo "==============================================="
+  echo ""
+
+  read -p "Proceed with provisioning $COUNT VMs? (y/n): " confirm
+  [[ "$confirm" != "y" && "$confirm" != "Y" ]] && { echo "❌ Cancelled."; exit 0; }
+
+  for i in $(seq 1 "$COUNT"); do
+    VM_NAME="${BASE_NAME}-${i}"
+    echo ""
+    echo "🚀 Creating VM [$i/$COUNT]: $VM_NAME"
+    oc process -n "$NAMESPACE" "$TEMPLATE" NAME="$VM_NAME" | oc apply -f - >/dev/null
+    if [[ $? -ne 0 ]]; then
+      echo "❌ Failed to create VM $VM_NAME. Skipping."
+      continue
+    fi
+
+    # Wait for VM to appear
+    for j in {1..20}; do
+      STATUS=$(oc get vm "$VM_NAME" -n "$NAMESPACE" -o jsonpath='{.status.printableStatus}' 2>/dev/null)
+      [[ -n "$STATUS" ]] && break
+      sleep 5
+    done
+
+    # Wait for it to become Stopped
+    echo "⏳ Waiting for VM $VM_NAME to reach 'Stopped'..."
+    for j in {1..60}; do
+      STATUS=$(oc get vm "$VM_NAME" -n "$NAMESPACE" -o jsonpath='{.status.printableStatus}' 2>/dev/null)
+      [[ "$STATUS" == "Stopped" ]] && break
+      sleep 5
+    done
+
+    echo "✅ VM $VM_NAME is Stopped. Starting it..."
+    virtctl start vm "$VM_NAME" -n "$NAMESPACE" >/dev/null
+
+    # Wait for Running state
+    for j in {1..60}; do
+      STATUS=$(oc get vm "$VM_NAME" -n "$NAMESPACE" -o jsonpath='{.status.printableStatus}' 2>/dev/null)
+      [[ "$STATUS" == "Running" ]] && { echo "✅ VM $VM_NAME is Running!"; break; }
+      sleep 5
+    done
+  done
+
+  echo ""
+  echo "==============================================="
+  echo "📦 Final VM List:"
+  oc get vm -n "$NAMESPACE" | grep "$BASE_NAME"
+  echo ""
+  echo "🧩 VMI List:"
+  oc get vmi -n "$NAMESPACE" | grep "$BASE_NAME"
+  echo ""
+  echo "✅ All $COUNT VMs created and started successfully."
+}
+
+# --- Function to delete multiple VMs ---
+delete_vms() {
+  echo ""
+  read -p "Enter VM base name (e.g., rhel8-node): " BASE_NAME
+  read -p "How many VMs to delete? " COUNT
+
+  if [[ -z "$BASE_NAME" || -z "$COUNT" || "$COUNT" -lt 1 ]]; then
+    echo "❌ Invalid input."
+    exit 1
+  fi
+
+  read -p "Are you sure you want to delete $COUNT VMs named '$BASE_NAME-[1-$COUNT]'? (y/n): " confirm
+  [[ "$confirm" != "y" && "$confirm" != "Y" ]] && { echo "❌ Cancelled."; exit 0; }
+
+  for i in $(seq 1 "$COUNT"); do
+    VM_NAME="${BASE_NAME}-${i}"
+    echo "🗑️  Deleting VM: $VM_NAME"
+    oc delete vm "$VM_NAME" -n "$NAMESPACE" --ignore-not-found >/dev/null
+    oc delete vmi "$VM_NAME" -n "$NAMESPACE" --ignore-not-found >/dev/null
+  done
+
+  echo "✅ All matching VMs deleted."
+}
+
+# --- Function to show VM status ---
+show_status() {
+  echo ""
+  echo "==============================================="
+  echo "📦 Virtual Machines:"
+  oc get vm -n "$NAMESPACE"
+  echo ""
+  echo "🧩 Virtual Machine Instances:"
+  oc get vmi -n "$NAMESPACE"
+}
+
+# --- Main menu ---
+echo "==============================================="
+echo "     ⚙️  OpenShift Multi-VM Management Menu"
+echo "==============================================="
+echo "1) Create & Start Multiple VMs"
+echo "2) Delete Multiple VMs"
+echo "3) Show VM Status"
+echo "4) Exit"
+echo "==============================================="
+
+read -p "Enter your choice [1-4]: " action
+case $action in
+  1) create_vms ;;
+  2) delete_vms ;;
+  3) show_status ;;
+  4) echo "👋 Exiting."; exit 0 ;;
+  *) echo "❌ Invalid option." ;;
+esac
+

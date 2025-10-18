@@ -1,0 +1,7 @@
+virtctl image-upload dv win2k22-volume \
+  --namespace uat-infra-tools \
+  --image-path ~/windows_server_2022.iso \
+  --access-mode ReadWriteMany \
+  --size 10Gi \
+  --storage-class nfs \
+  --insecure

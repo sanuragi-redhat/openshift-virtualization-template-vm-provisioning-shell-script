@@ -1,0 +1,133 @@
+#!/bin/bash
+
+# ===============================================
+# 🔧 OpenShift VM Template Provisioner & Auto Starter
+# ===============================================
+
+# Namespace where templates are located
+NAMESPACE="uat-infra-tools"
+
+# List of available templates
+declare -A templates
+templates=(
+  ["1"]="centos-stream9-desktop"
+  ["2"]="rhel8-desktop"
+  ["3"]="windows2k22-vm-template"
+  ["4"]="windows2k25"
+)
+
+echo "==============================================="
+echo "      🔧 OpenShift VM Template Provisioner"
+echo "==============================================="
+echo ""
+echo "Select a template to provision:"
+echo "1) CentOS Stream 9 Desktop"
+echo "2) RHEL 8 Desktop"
+echo "3) Windows Server 2022 (Template)"
+echo "4) Windows Server 2025"
+echo ""
+
+read -p "Enter your choice [1-4]: " choice
+
+# Validate input
+if [[ -z "${templates[$choice]}" ]]; then
+  echo "❌ Invalid choice. Exiting."
+  exit 1
+fi
+
+TEMPLATE=${templates[$choice]}
+
+# Ask for VM name
+read -p "Enter VM name: " VM_NAME
+
+if [[ -z "$VM_NAME" ]]; then
+  echo "❌ VM name cannot be empty."
+  exit 1
+fi
+
+echo ""
+echo "==============================================="
+echo " You have selected:"
+echo " Template:  $TEMPLATE"
+echo " VM Name:   $VM_NAME"
+echo " Namespace: $NAMESPACE"
+echo "==============================================="
+echo ""
+
+read -p "Proceed with provisioning? (y/n): " confirm
+if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+  echo "❌ Operation cancelled."
+  exit 0
+fi
+
+# Step 1: Provision the VM
+echo "🚀 Provisioning VM from template..."
+oc process -n "$NAMESPACE" "$TEMPLATE" NAME="$VM_NAME" | oc apply -f -
+
+if [[ $? -ne 0 ]]; then
+  echo "❌ Failed to create VM. Please check logs."
+  exit 1
+fi
+
+# Step 2: Wait until VM shows up
+echo ""
+echo "⏳ Waiting for VM resource to appear..."
+for i in {1..20}; do
+  STATUS=$(oc get vm "$VM_NAME" -n "$NAMESPACE" -o jsonpath='{.status.printableStatus}' 2>/dev/null)
+  if [[ -n "$STATUS" ]]; then
+    echo "✅ VM detected: $STATUS"
+    break
+  fi
+  sleep 5
+done
+
+# Step 3: Wait until VM becomes Stopped
+echo ""
+echo "⏳ Waiting for VM status to become 'Stopped'..."
+for i in {1..60}; do
+  STATUS=$(oc get vm "$VM_NAME" -n "$NAMESPACE" -o jsonpath='{.status.printableStatus}' 2>/dev/null)
+  if [[ "$STATUS" == "Stopped" ]]; then
+    echo "✅ VM is in 'Stopped' state."
+    break
+  fi
+  echo "   Current status: ${STATUS:-Pending} (waiting...)"
+  sleep 5
+done
+
+# Step 4: Start the VM automatically
+echo ""
+echo "🚀 Starting the VM..."
+virtctl start vm "$VM_NAME" -n "$NAMESPACE"
+
+if [[ $? -ne 0 ]]; then
+  echo "❌ Failed to start VM. Please check logs."
+  exit 1
+fi
+
+# Step 5: Wait for VM to be running
+echo ""
+echo "⏳ Waiting for VM to enter 'Running' state..."
+for i in {1..60}; do
+  STATUS=$(oc get vm "$VM_NAME" -n "$NAMESPACE" -o jsonpath='{.status.printableStatus}' 2>/dev/null)
+  if [[ "$STATUS" == "Running" ]]; then
+    echo "✅ VM is Running!"
+    break
+  fi
+  echo "   Current status: ${STATUS:-Pending} (waiting...)"
+  sleep 5
+done
+
+# Step 6: Show final status
+echo ""
+echo "==============================================="
+echo "📦 Final VM Status:"
+oc get vm "$VM_NAME" -n "$NAMESPACE"
+
+echo ""
+echo "==============================================="
+echo "🧩 VMI Status:"
+oc get vmi "$VM_NAME" -n "$NAMESPACE" || echo "⚠️  No VMI found yet."
+
+echo ""
+echo "✅ All done."
+

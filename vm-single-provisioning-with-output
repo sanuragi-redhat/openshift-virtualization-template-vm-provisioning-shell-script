@@ -1,0 +1,89 @@
+#!/bin/bash
+
+# ===============================================
+# 🔧 OpenShift VM Template Provisioner
+# ===============================================
+
+# Namespace where templates are located
+NAMESPACE="uat-infra-tools"
+
+# List of available templates
+declare -A templates
+templates=(
+  ["1"]="centos-stream9-desktop"
+  ["2"]="rhel8-desktop"
+  ["3"]="windows2k22-vm-template"
+  ["4"]="windows2k25"
+)
+
+echo "==============================================="
+echo "      🔧 OpenShift VM Template Provisioner"
+echo "==============================================="
+echo ""
+echo "Select a template to provision:"
+echo "1) CentOS Stream 9 Desktop"
+echo "2) RHEL 8 Desktop"
+echo "3) Windows Server 2022 (Template)"
+echo "4) Windows Server 2025"
+echo ""
+
+read -p "Enter your choice [1-4]: " choice
+
+# Validate input
+if [[ -z "${templates[$choice]}" ]]; then
+  echo "❌ Invalid choice. Exiting."
+  exit 1
+fi
+
+TEMPLATE=${templates[$choice]}
+
+# Ask for VM name
+read -p "Enter VM name: " VM_NAME
+
+if [[ -z "$VM_NAME" ]]; then
+  echo "❌ VM name cannot be empty."
+  exit 1
+fi
+
+echo ""
+echo "==============================================="
+echo " You have selected:"
+echo " Template:  $TEMPLATE"
+echo " VM Name:   $VM_NAME"
+echo " Namespace: $NAMESPACE"
+echo "==============================================="
+echo ""
+
+read -p "Proceed with provisioning? (y/n): " confirm
+if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+  echo "❌ Operation cancelled."
+  exit 0
+fi
+
+# Run the OpenShift commands
+echo "🚀 Provisioning VM from template..."
+oc process -n "$NAMESPACE" "$TEMPLATE" NAME="$VM_NAME" | oc apply -f -
+
+if [[ $? -ne 0 ]]; then
+  echo "❌ Failed to create VM. Please check the logs."
+  exit 1
+fi
+
+# Wait for a few seconds before showing VM status
+echo ""
+echo "⏳ Waiting for VM to appear..."
+sleep 5
+
+echo ""
+echo "==============================================="
+echo "📦 VM List:"
+oc get vm -n "$NAMESPACE" | grep "$VM_NAME" || echo "⚠️  VM not found yet."
+
+echo ""
+echo "==============================================="
+echo "🧩 VMI List (VirtualMachineInstances):"
+oc get vmi -n "$NAMESPACE" | grep "$VM_NAME" || echo "⚠️  No VMI created yet."
+
+echo ""
+echo "✅ Done."
+

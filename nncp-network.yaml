@@ -1,0 +1,11 @@
+apiVersion: nmstate.io/v1
+kind: NodeNetworkConfigurationPolicy
+metadata:
+  name: nad-network
+spec:
+  desiredState:
+    ovn:
+      bridge-mappings:
+      - localnet: localnet-network
+        bridge: br-ex
+        state: present

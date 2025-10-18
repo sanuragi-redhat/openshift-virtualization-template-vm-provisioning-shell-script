@@ -1,0 +1,139 @@
+#!/bin/bash
+
+# ===============================================
+# 🔧 OpenShift VM Manager (Provision / Start / Delete)
+# ===============================================
+
+NAMESPACE="uat-infra-tools"
+
+# List of available templates
+declare -A templates
+templates=(
+  ["1"]="centos-stream9-desktop"
+  ["2"]="rhel8-desktop"
+  ["3"]="windows2k22-vm-template"
+  ["4"]="windows2k25"
+)
+
+# --- Function to create a VM ---
+create_vm() {
+  echo ""
+  echo "Select a template to provision:"
+  echo "1) CentOS Stream 9 Desktop"
+  echo "2) RHEL 8 Desktop"
+  echo "3) Windows Server 2022 (Template)"
+  echo "4) Windows Server 2025"
+  echo ""
+
+  read -p "Enter your choice [1-4]: " choice
+  if [[ -z "${templates[$choice]}" ]]; then
+    echo "❌ Invalid choice. Exiting."
+    exit 1
+  fi
+
+  TEMPLATE=${templates[$choice]}
+  read -p "Enter VM name: " VM_NAME
+  [[ -z "$VM_NAME" ]] && { echo "❌ VM name cannot be empty."; exit 1; }
+
+  echo ""
+  echo "==============================================="
+  echo " You have selected:"
+  echo " Template:  $TEMPLATE"
+  echo " VM Name:   $VM_NAME"
+  echo " Namespace: $NAMESPACE"
+  echo "==============================================="
+  echo ""
+
+  read -p "Proceed with provisioning? (y/n): " confirm
+  [[ "$confirm" != "y" && "$confirm" != "Y" ]] && { echo "❌ Operation cancelled."; exit 0; }
+
+  echo "🚀 Provisioning VM from template..."
+  oc process -n "$NAMESPACE" "$TEMPLATE" NAME="$VM_NAME" | oc apply -f - || {
+    echo "❌ Failed to create VM. Exiting."
+    exit 1
+  }
+
+  echo "⏳ Waiting for VM resource to appear..."
+  for i in {1..20}; do
+    STATUS=$(oc get vm "$VM_NAME" -n "$NAMESPACE" -o jsonpath='{.status.printableStatus}' 2>/dev/null)
+    [[ -n "$STATUS" ]] && { echo "✅ VM detected: $STATUS"; break; }
+    sleep 5
+  done
+
+  echo "⏳ Waiting for VM to reach 'Stopped'..."
+  for i in {1..60}; do
+    STATUS=$(oc get vm "$VM_NAME" -n "$NAMESPACE" -o jsonpath='{.status.printableStatus}' 2>/dev/null)
+    [[ "$STATUS" == "Stopped" ]] && { echo "✅ VM is in 'Stopped' state."; break; }
+    echo "   Current status: ${STATUS:-Pending} (waiting...)"
+    sleep 5
+  done
+
+  echo ""
+  echo "🚀 Starting the VM..."
+  virtctl start vm "$VM_NAME" -n "$NAMESPACE"
+
+  echo "⏳ Waiting for VM to be 'Running'..."
+  for i in {1..60}; do
+    STATUS=$(oc get vm "$VM_NAME" -n "$NAMESPACE" -o jsonpath='{.status.printableStatus}' 2>/dev/null)
+    [[ "$STATUS" == "Running" ]] && { echo "✅ VM is Running!"; break; }
+    echo "   Current status: ${STATUS:-Pending} (waiting...)"
+    sleep 5
+  done
+
+  echo ""
+  echo "==============================================="
+  echo "📦 Final VM Status:"
+  oc get vm "$VM_NAME" -n "$NAMESPACE"
+  echo ""
+  echo "🧩 VMI Status:"
+  oc get vmi "$VM_NAME" -n "$NAMESPACE" || echo "⚠️  No VMI found yet."
+}
+
+# --- Function to delete a VM ---
+delete_vm() {
+  echo ""
+  oc get vm -n "$NAMESPACE"
+  echo ""
+  read -p "Enter the VM name to delete: " VM_NAME
+  [[ -z "$VM_NAME" ]] && { echo "❌ VM name cannot be empty."; exit 1; }
+
+  read -p "Are you sure you want to delete VM '$VM_NAME'? (y/n): " confirm
+  [[ "$confirm" != "y" && "$confirm" != "Y" ]] && { echo "❌ Operation cancelled."; exit 0; }
+
+  echo "🗑️  Deleting VM '$VM_NAME'..."
+  oc delete vm "$VM_NAME" -n "$NAMESPACE" --ignore-not-found
+  oc delete vmi "$VM_NAME" -n "$NAMESPACE" --ignore-not-found
+
+  echo "✅ VM '$VM_NAME' and its instance have been removed."
+}
+
+# --- Function to show VM status ---
+show_status() {
+  echo ""
+  echo "==============================================="
+  echo "📦 Virtual Machines:"
+  oc get vm -n "$NAMESPACE"
+  echo ""
+  echo "🧩 Virtual Machine Instances:"
+  oc get vmi -n "$NAMESPACE"
+}
+
+# --- Main menu ---
+echo "==============================================="
+echo "     ⚙️  OpenShift VM Management Menu"
+echo "==============================================="
+echo "1) Create & Auto-Start VM"
+echo "2) Delete VM"
+echo "3) Show VM Status"
+echo "4) Exit"
+echo "==============================================="
+
+read -p "Enter your choice [1-4]: " action
+case $action in
+  1) create_vm ;;
+  2) delete_vm ;;
+  3) show_status ;;
+  4) echo "👋 Exiting."; exit 0 ;;
+  *) echo "❌ Invalid option." ;;
+esac
+
